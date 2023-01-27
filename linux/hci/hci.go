@@ -117,7 +117,9 @@ type HCI struct {
 	dialerTmo   time.Duration
 	listenerTmo time.Duration
 
-	err  error
+	errMux sync.Mutex
+	err    error
+
 	done chan bool
 }
 
@@ -171,7 +173,11 @@ func (h *HCI) Close() error {
 
 // Error ...
 func (h *HCI) Error() error {
-	return h.err
+	h.errMux.Lock()
+	err := h.err
+	h.errMux.Unlock()
+
+	return err
 }
 
 // Option sets the options specified.
@@ -222,7 +228,11 @@ func (h *HCI) init() error {
 	WriteLEHostSupportRP := cmd.WriteLEHostSupportRP{}
 	h.Send(&cmd.WriteLEHostSupport{LESupportedHost: 1, SimultaneousLEHost: 0}, &WriteLEHostSupportRP)
 
-	return h.err
+	h.errMux.Lock()
+	err := h.err
+	h.errMux.Unlock()
+
+	return err
 }
 
 // Send ...
@@ -244,9 +254,13 @@ func (h *HCI) Send(c Command, r CommandRP) error {
 }
 
 func (h *HCI) send(c Command) ([]byte, error) {
-	if h.err != nil {
-		return nil, h.err
+	h.errMux.Lock()
+	herr := h.err
+	h.errMux.Unlock()
+	if herr != nil {
+		return nil, herr
 	}
+
 	p := &pkt{c, make(chan []byte)}
 	b := <-h.chCmdBufs
 	b[0] = byte(pktTypeCommand) // HCI header
@@ -278,7 +292,9 @@ func (h *HCI) send(c Command) ([]byte, error) {
 		err = fmt.Errorf("hci: no response to command, hci connection failed")
 		ret = nil
 	case <-h.done:
+		h.errMux.Lock()
 		err = h.err
+		h.errMux.Unlock()
 		ret = nil
 	case b := <-p.done:
 		err = nil
@@ -302,11 +318,13 @@ func (h *HCI) sktLoop() {
 	for {
 		n, err := h.skt.Read(b)
 		if n == 0 || err != nil {
+			h.errMux.Lock()
 			if err == io.EOF {
-				h.err = err //callers depend on detecting io.EOF, don't wrap it.
+				h.err = err // callers depend on detecting io.EOF, don't wrap it.
 			} else {
 				h.err = fmt.Errorf("skt: %s", err)
 			}
+			h.errMux.Unlock()
 			return
 		}
 		p := make([]byte, n)
@@ -325,7 +343,9 @@ func (h *HCI) sktLoop() {
 }
 
 func (h *HCI) close(err error) error {
+	h.errMux.Lock()
 	h.err = err
+	h.errMux.Unlock()
 	if h.skt != nil {
 		return h.skt.Close()
 	}
@@ -375,10 +395,14 @@ func (h *HCI) handleEvt(b []byte) error {
 		}
 	}
 	if plen != len(b[2:]) {
+		h.errMux.Lock()
 		h.err = fmt.Errorf("invalid event packet: % X", b)
+		h.errMux.Unlock()
 	}
 	if f := h.evth[code]; f != nil {
+		h.errMux.Lock()
 		h.err = f(b[2:])
+		h.errMux.Unlock()
 		return nil
 	}
 	if code == 0xff { // Ignore vendor events
@@ -588,9 +612,8 @@ func (h *HCI) handleLELongTermKeyRequest(b []byte) error {
 }
 
 func (h *HCI) setAllowedCommands(n int) {
-
-	//hard-coded limit to command queue depth
-	//matches make(chan []byte, 16) in NewHCI
+	// hard-coded limit to command queue depth
+	// matches make(chan []byte, 16) in NewHCI
 	// TODO make this a constant, decide correct size
 	if n > 16 {
 		n = 16
