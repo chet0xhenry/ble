@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	"github.com/go-ble/ble"
 	"github.com/go-ble/ble/linux/hci/cmd"
@@ -29,6 +30,7 @@ type Conn struct {
 	// For LE-U logical transport, the L2CAP implementations should support
 	// a minimum of 23 bytes, which are also the default values before the
 	// upper layer (ATT) optionally reconfigures them [Vol 3, Part A, 3.2.8].
+	muMTU sync.Mutex
 	rxMTU int
 	txMTU int
 	rxMPS int
@@ -261,9 +263,11 @@ func (c *Conn) recombine() error {
 	// Currently, check for LE-U only. For channels that we don't recognizes,
 	// re-combine them anyway, and discard them later when we dispatch the PDU
 	// according to CID.
+	c.muMTU.Lock()
 	if p.cid() == cidLEAtt && p.dlen() > c.rxMPS {
 		return fmt.Errorf("fragment size (%d) larger than rxMPS (%d)", p.dlen(), c.rxMPS)
 	}
+	c.muMTU.Unlock()
 
 	// If this pkt is not a complete PDU, and we'll be receiving more
 	// fragments, re-allocate the whole PDU (including Header).
@@ -334,7 +338,11 @@ func (c *Conn) RemoteAddr() ble.Addr {
 func (c *Conn) RxMTU() int { return c.rxMTU }
 
 // SetRxMTU sets the MTU which the upper layer is capable of accepting.
-func (c *Conn) SetRxMTU(mtu int) { c.rxMTU, c.rxMPS = mtu, mtu }
+func (c *Conn) SetRxMTU(mtu int) {
+	c.muMTU.Lock()
+	c.rxMTU, c.rxMPS = mtu, mtu
+	c.muMTU.Unlock()
+}
 
 // TxMTU returns the MTU which the remote device is capable of accepting.
 func (c *Conn) TxMTU() int { return c.txMTU }

@@ -86,7 +86,6 @@ func (h *HCI) AdvertiseAdv(a ble.Advertisement) error {
 		return nil
 	}
 	return h.Advertise()
-
 }
 
 // AdvertiseNameAndServices advertises device name, and specified service UUIDs.
@@ -177,7 +176,9 @@ func (h *HCI) AdvertiseIBeacon(u ble.UUID, major, minor uint16, pwr int8) error 
 
 // StopAdvertising stops advertising.
 func (h *HCI) StopAdvertising() error {
+	h.params.Lock()
 	h.params.advEnable.AdvertisingEnable = 0
+	h.params.Unlock()
 	return h.Send(&h.params.advEnable, nil)
 }
 
